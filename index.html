@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Finch Field Transcoder</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
+
+    #wrap {
+      width: 100%; height: 100%;
+      display: flex; align-items: center; justify-content: center;
+    }
+
+    #img-box {
+      position: relative;
+      display: inline-block;
+      line-height: 0;
+    }
+
+    #console-img {
+      max-width: 100vw; max-height: 100vh;
+      width: auto; height: auto;
+      display: block; user-select: none;
+      -webkit-user-drag: none;
+    }
+
+    /* Clickable hotspot */
+    .zone {
+      position: absolute;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      border-radius: 4px;
+      transition: background 0.15s ease, box-shadow 0.15s ease;
+    }
+    .zone:hover {
+      background: rgba(255, 255, 255, 0.08);
+    }
+    .zone:active {
+      background: rgba(61, 255, 138, 0.25);
+      box-shadow: 0 0 10px rgba(61, 255, 138, 0.5);
+    }
+
+    /* Selected state for node buttons */
+    .zone.selected {
+      background: rgba(61, 255, 138, 0.2);
+      box-shadow: inset 0 0 8px rgba(61, 255, 138, 0.8), 0 0 12px rgba(61, 255, 138, 0.6);
+      border: 1px solid rgba(61, 255, 138, 0.6);
+    }
+
+    /* Digit drawn over the switch display */
+    .cfg-digit {
+      position: absolute;
+      font-family: 'Courier New', monospace;
+      font-weight: bold;
+      color: #3dff8a;
+      text-shadow: 0 0 10px #3dff8a, 0 0 3px #000;
+      pointer-events: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+      user-select: none;
+    }
+  </style>
+</head>
+<body>
+<div id="wrap">
+  <div id="img-box">
+    <img id="console-img" src="1946 Finch Field Transcoder Console.png" alt="Finch Field Transcoder" draggable="false" />
+  </div>
+</div>
+
+<script>
+  const IW = 1536, IH = 1024;
+  const ZONES = [
+    { "name": "cfg-0-digit", "x": 803, "y": 779, "w": 79, "h": 52 },
+    { "name": "cfg-0-down",  "x": 801, "y": 805, "w": 84, "h": 60 },
+    { "name": "cfg-0-up",    "x": 805, "y": 744, "w": 77, "h": 61 },
+    { "name": "cfg-1-digit", "x": 910, "y": 781, "w": 77, "h": 52 },
+    { "name": "cfg-1-down",  "x": 909, "y": 807, "w": 77, "h": 55 },
+    { "name": "cfg-1-up",    "x": 911, "y": 743, "w": 78, "h": 64 },
+    { "name": "cfg-2-digit", "x": 1017, "y": 782, "w": 76, "h": 53 },
+    { "name": "cfg-2-down",  "x": 1015, "y": 808, "w": 79, "h": 60 },
+    { "name": "cfg-2-up",    "x": 1017, "y": 743, "w": 78, "h": 65 },
+    { "name": "cfg-3-digit", "x": 1122, "y": 777, "w": 82, "h": 58 },
+    { "name": "cfg-3-down",  "x": 1119, "y": 806, "w": 79, "h": 58 },
+    { "name": "cfg-3-up",    "x": 1120, "y": 740, "w": 85, "h": 66 },
+    { "name": "execute",     "x": 1315, "y": 738, "w": 115, "h": 115 },
+    { "name": "node-A",      "x": 122,  "y": 749, "w": 73,  "h": 80 },
+    { "name": "node-B",      "x": 235,  "y": 750, "w": 78,  "h": 74 },
+    { "name": "node-C",      "x": 353,  "y": 751, "w": 75,  "h": 73 },
+    { "name": "node-D",      "x": 467,  "y": 751, "w": 81,  "h": 78 },
+    { "name": "node-E",      "x": 590,  "y": 757, "w": 73,  "h": 68 }
+  ];
+
+  const digits = [0, 0, 0, 0];
+  let selectedNode = null;
+  const img = document.getElementById('console-img');
+  const box = document.getElementById('img-box');
+
+  function init() {
+    box.querySelectorAll('.zone, .cfg-digit').forEach(el => el.remove());
+
+    ZONES.forEach(z => {
+      const leftPercent   = (z.x / IW) * 100;
+      const topPercent    = (z.y / IH) * 100;
+      const widthPercent  = (z.w / IW) * 100;
+      const heightPercent = (z.h / IH) * 100;
+
+      if (z.name.endsWith('-digit')) {
+        const idx = parseInt(z.name.split('-')[1]);
+        const d = document.createElement('div');
+        d.className = 'cfg-digit';
+        d.id = 'digit-' + idx;
+        d.textContent = digits[idx];
+        d.style.left   = leftPercent + '%';
+        d.style.top    = topPercent + '%';
+        d.style.width  = widthPercent + '%';
+        d.style.height = heightPercent + '%';
+        box.appendChild(d);
+      } else if (z.name.includes('-up') || z.name.includes('-down')) {
+        const idx = parseInt(z.name.split('-')[1]);
+        const dir = z.name.includes('-up') ? 1 : -1;
+        const el = document.createElement('div');
+        el.className = 'zone';
+        el.style.left   = leftPercent + '%';
+        el.style.top    = topPercent + '%';
+        el.style.width  = widthPercent + '%';
+        el.style.height = heightPercent + '%';
+        el.addEventListener('click', (e) => {
+          e.stopPropagation();
+          digits[idx] = (digits[idx] + 10 + dir) % 10;
+          document.getElementById('digit-' + idx).textContent = digits[idx];
+        });
+        box.appendChild(el);
+      } else if (z.name.startsWith('node-')) {
+        const el = document.createElement('div');
+        el.className = 'zone node-button';
+        el.id = z.name;
+        el.style.left   = leftPercent + '%';
+        el.style.top    = topPercent + '%';
+        el.style.width  = widthPercent + '%';
+        el.style.height = heightPercent + '%';
+        el.addEventListener('click', (e) => {
+          e.stopPropagation();
+          box.querySelectorAll('.node-button').forEach(nb => nb.classList.remove('selected'));
+          el.classList.add('selected');
+          selectedNode = z.name.replace('node-', '');
+        });
+        box.appendChild(el);
+      } else {
+        const el = document.createElement('div');
+        el.className = 'zone';
+        el.id = z.name;
+        el.style.left   = leftPercent + '%';
+        el.style.top    = topPercent + '%';
+        el.style.width  = widthPercent + '%';
+        el.style.height = heightPercent + '%';
+        el.addEventListener('click', (e) => {
+          e.stopPropagation();
+          alert(`Executing for Node ${selectedNode || 'None'} with config [${digits.join('')}]`);
+        });
+        box.appendChild(el);
+      }
+    });
+
+    syncBoxSize();
+  }
+
+  function syncBoxSize() {
+    const iw = img.offsetWidth;
+    const ih = img.offsetHeight;
+    if (!iw || !ih) return;
+    box.style.width  = iw + 'px';
+    box.style.height = ih + 'px';
+    const fontSize = Math.round(ih * (52 / IH) * 0.8) + 'px';
+    document.querySelectorAll('.cfg-digit').forEach(d => {
+      d.style.fontSize = fontSize;
+    });
+  }
+
+  if (img.complete && img.naturalWidth) {
+    init();
+  } else {
+    img.addEventListener('load', init);
+  }
+
+  window.addEventListener('resize', syncBoxSize);
+  const resizeObserver = new ResizeObserver(() => syncBoxSize());
+  resizeObserver.observe(img);
+</script>
+</body>
+</html>
+

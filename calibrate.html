@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Zone Calibrator — FT-3</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #1a1a1a; color: #eee; font-family: monospace; display: flex; flex-direction: column; height: 100vh; }
+
+    #toolbar {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 12px; background: #111; border-bottom: 1px solid #333; flex-shrink: 0; flex-wrap: wrap;
+    }
+    #toolbar label { font-size: 13px; color: #aaa; }
+    select, button {
+      font-family: monospace; font-size: 13px; padding: 4px 8px;
+      background: #2a2a2a; color: #eee; border: 1px solid #555; border-radius: 4px; cursor: pointer;
+    }
+    button:hover { background: #3a3a3a; }
+    button.danger { border-color: #c44; color: #f88; }
+    button.primary { border-color: #4a4; color: #8f8; }
+    #status { font-size: 12px; color: #f90; margin-left: auto; }
+
+    #canvas-wrap {
+      flex: 1; overflow: auto; display: flex; align-items: flex-start; justify-content: flex-start;
+      padding: 10px; position: relative;
+    }
+
+    #canvas { cursor: crosshair; display: block; }
+
+    #zone-list {
+      position: fixed; right: 0; top: 0; bottom: 0; width: 240px;
+      background: #111; border-left: 1px solid #333; overflow-y: auto;
+      padding: 8px; font-size: 11px;
+    }
+    #zone-list h3 { color: #8f8; margin-bottom: 6px; font-size: 12px; }
+    .zone-item {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 4px 6px; border-bottom: 1px solid #222; gap: 6px;
+    }
+    .zone-item span { flex: 1; word-break: break-all; }
+    .zone-item button { padding: 1px 5px; font-size: 11px; }
+
+    #canvas-wrap { margin-right: 240px; }
+  </style>
+</head>
+<body>
+
+<div id="toolbar">
+  <label>Zone:</label>
+  <select id="zone-name">
+    <optgroup label="Config switches">
+      <option>cfg-0-up</option>
+      <option>cfg-0-digit</option>
+      <option>cfg-0-down</option>
+      <option>cfg-1-up</option>
+      <option>cfg-1-digit</option>
+      <option>cfg-1-down</option>
+      <option>cfg-2-up</option>
+      <option>cfg-2-digit</option>
+      <option>cfg-2-down</option>
+      <option>cfg-3-up</option>
+      <option>cfg-3-digit</option>
+      <option>cfg-3-down</option>
+    </optgroup>
+    <optgroup label="Node buttons">
+      <option>node-A</option>
+      <option>node-B</option>
+      <option>node-C</option>
+      <option>node-D</option>
+      <option>node-E</option>
+    </optgroup>
+    <optgroup label="Other">
+      <option>execute</option>
+    </optgroup>
+  </select>
+
+  <button class="primary" onclick="exportJSON()">⬇ Export zones.json</button>
+  <button class="danger" onclick="clearAll()">✕ Clear all</button>
+  <span id="status">Click and drag on the image to draw a zone</span>
+</div>
+
+<div id="canvas-wrap">
+  <canvas id="canvas"></canvas>
+</div>
+
+<div id="zone-list">
+  <h3>Saved zones</h3>
+  <div id="zone-items"></div>
+</div>
+
+<script>
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  const img = new Image();
+  img.src = '1946 Finch Field Transcoder Console.png';
+
+  // All saved zones: { name, x, y, w, h } — in image-native pixels
+  let zones = [];
+
+  // Load existing zones.json if present (won't work from file://, but fine on server)
+  fetch('zones.json').then(r => r.json()).then(data => {
+    zones = data;
+    redraw();
+    renderList();
+  }).catch(() => {});
+
+  img.onload = () => {
+    canvas.width  = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    redraw();
+  };
+
+  // ── Drawing state ──
+  let drawing = false;
+  let startX, startY, curX, curY;
+
+  canvas.addEventListener('mousedown', e => {
+    const r = canvas.getBoundingClientRect();
+    const scaleX = canvas.width  / r.width;
+    const scaleY = canvas.height / r.height;
+    startX = (e.clientX - r.left) * scaleX;
+    startY = (e.clientY - r.top)  * scaleY;
+    drawing = true;
+  });
+
+  canvas.addEventListener('mousemove', e => {
+    if (!drawing) return;
+    const r = canvas.getBoundingClientRect();
+    const scaleX = canvas.width  / r.width;
+    const scaleY = canvas.height / r.height;
+    curX = (e.clientX - r.left) * scaleX;
+    curY = (e.clientY - r.top)  * scaleY;
+    redraw();
+    // Draw in-progress rect
+    ctx.strokeStyle = '#ff0';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 3]);
+    ctx.strokeRect(startX, startY, curX - startX, curY - startY);
+    ctx.setLineDash([]);
+  });
+
+  canvas.addEventListener('mouseup', e => {
+    if (!drawing) return;
+    drawing = false;
+    const r = canvas.getBoundingClientRect();
+    const scaleX = canvas.width  / r.width;
+    const scaleY = canvas.height / r.height;
+    curX = (e.clientX - r.left) * scaleX;
+    curY = (e.clientY - r.top)  * scaleY;
+
+    const x = Math.round(Math.min(startX, curX));
+    const y = Math.round(Math.min(startY, curY));
+    const w = Math.round(Math.abs(curX - startX));
+    const h = Math.round(Math.abs(curY - startY));
+
+    if (w < 4 || h < 4) return; // too small, ignore
+
+    const name = document.getElementById('zone-name').value;
+    // Replace existing zone with same name
+    zones = zones.filter(z => z.name !== name);
+    zones.push({ name, x, y, w, h });
+    zones.sort((a, b) => a.name.localeCompare(b.name));
+
+    document.getElementById('status').textContent = `Saved: ${name} (${x},${y} ${w}×${h})`;
+    redraw();
+    renderList();
+    advanceDropdown();
+  });
+
+  function redraw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0);
+
+    const COLORS = {
+      'cfg': '#00cfff',
+      'node': '#ffaa00',
+      'execute': '#ff4444',
+    };
+
+    zones.forEach(z => {
+      const key = Object.keys(COLORS).find(k => z.name.startsWith(k)) || 'cfg';
+      const col = COLORS[key];
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(z.x, z.y, z.w, z.h);
+      // Fill label
+      ctx.fillStyle = col + 'aa';
+      ctx.fillRect(z.x, z.y, z.w, 18);
+      ctx.fillStyle = '#000';
+      ctx.font = 'bold 12px monospace';
+      ctx.fillText(z.name, z.x + 3, z.y + 13);
+    });
+  }
+
+  function renderList() {
+    const container = document.getElementById('zone-items');
+    container.innerHTML = '';
+    zones.forEach(z => {
+      const row = document.createElement('div');
+      row.className = 'zone-item';
+      row.innerHTML = `
+        <span>${z.name}<br><small style="color:#777">${z.x},${z.y} ${z.w}×${z.h}</small></span>
+        <button onclick="deleteZone('${z.name}')">✕</button>
+      `;
+      container.appendChild(row);
+    });
+  }
+
+  function deleteZone(name) {
+    zones = zones.filter(z => z.name !== name);
+    redraw();
+    renderList();
+  }
+
+  function clearAll() {
+    if (confirm('Clear all zones?')) { zones = []; redraw(); renderList(); }
+  }
+
+  function exportJSON() {
+    const blob = new Blob([JSON.stringify(zones, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'zones.json';
+    a.click();
+  }
+
+  // Auto-advance dropdown to next logical zone after saving
+  function advanceDropdown() {
+    const sel = document.getElementById('zone-name');
+    if (sel.selectedIndex < sel.options.length - 1) sel.selectedIndex++;
+  }
+</script>
+</body>
+</html>
